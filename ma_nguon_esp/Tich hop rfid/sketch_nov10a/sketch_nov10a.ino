@@ -33,7 +33,7 @@ byte rowPins[ROWS] = {14, 27, 26, 25};
 byte colPins[COLS] = {33, 32, 18, 19};
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
-// MFRC522 pins (the mapping you gave)
+// MFRC522 pins 
 #define SS_PIN 5   // SDA -> D5
 #define RST_PIN 4  // RST -> D4
 #define SCK_PIN 15 // D15
@@ -50,16 +50,20 @@ SemaphoreHandle_t inputMutex;
 volatile bool rfidDisplayActive = false;
 volatile uint32_t rfidDisplayEnd = 0;
 
-// ---- Helper functions ----
+// Helper functions
 void safePrintCenter(const String &s, int textSize = 1) {
   if (xSemaphoreTake(displayMutex, (TickType_t)10) == pdTRUE) {
     display.clearDisplay();
+    display.setTextSize(textSize);   // set size trước
+    display.setTextColor(WHITE);
+
     int16_t x1, y1;
     uint16_t w, h;
     display.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
+
     int centerX = (SCREEN_WIDTH - w) / 2;
     int centerY = (SCREEN_HEIGHT - h) / 2;
-    display.setTextSize(textSize);
+
     display.setCursor(centerX, centerY);
     display.print(s);
     display.display();
@@ -72,26 +76,36 @@ void showUnlockMessage() {
   safePrintCenter("Mo khoa thanh cong!", 1);
 }
 
-// Hiển thị UID (chuẩn)
+// Hiển thị UID 
 void showRFIDUID(const String &uidStr) {
-  // bật cờ hiển thị RFID trong 2 giây
   rfidDisplayActive = true;
   rfidDisplayEnd = millis() + 2000;
-  safePrintCenter("RFID UID:", 1);
-  // hiển thị UID ở dòng dưới
+
   if (xSemaphoreTake(displayMutex, (TickType_t)10) == pdTRUE) {
+    display.clearDisplay();
     display.setTextSize(1);
+
+    // Vẽ dòng tiêu đề
+    String title = "RFID UID:";
     int16_t x1, y1;
     uint16_t w, h;
-    display.getTextBounds("RFID UID:", 0, 0, &x1, &y1, &w, &h);
+    display.getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
     int centerX = (SCREEN_WIDTH - w) / 2;
-    int y = (SCREEN_HEIGHT - h) / 2 + 12;
-    display.setCursor( (SCREEN_WIDTH - (int)uidStr.length()*6) / 2, y);
+    int centerY = (SCREEN_HEIGHT - h) / 2 - 8;
+    display.setCursor(centerX, centerY);
+    display.print(title);
+
+    // Vẽ UID ở dòng dưới
+    int uidWidth = uidStr.length() * 6; // mỗi ký tự ~6 pixel
+    int uidX = (SCREEN_WIDTH - uidWidth) / 2;
+    display.setCursor(uidX, centerY + 12);
     display.print(uidStr);
+
     display.display();
     xSemaphoreGive(displayMutex);
   }
 }
+
 
 // Hàm hiển thị màn hình nhập mật khẩu (khi không bị ghi đè bởi RFID)
 void displayKeypadScreen() {
@@ -104,7 +118,7 @@ void displayKeypadScreen() {
     // Tính vị trí để hiển thị input
     int16_t x1, y1;
     uint16_t w, h;
-    String masked = inputString; // bạn có thể thay bằng **** nếu muốn ẩn
+    String masked = inputString; //có thể thay bằng **** nếu muốn ẩn
     display.getTextBounds(masked, 0, 0, &x1, &y1, &w, &h);
     int centerX = (SCREEN_WIDTH - w - offset * 5) / 2;
     int centerY = (SCREEN_HEIGHT - h) / 2;
