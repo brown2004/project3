@@ -20,7 +20,7 @@ class MyApp extends StatelessWidget {
       home: const LoginPage(),
     );
   }
-}
+}alo
 
 // ================== 1. MÀN HÌNH ĐĂNG NHẬP & QUÊN MẬT KHẨU ==================
 
