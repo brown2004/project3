@@ -1,0 +1,19 @@
+Giải thích các thay đổi chính:
+
+- Code cũ dùng mảng cứng validUIDs[]. Code mới dùng std::vector<String>.
+
+
+
+- Logic "Learning Mode" (Chế độ học):
+
+	Khi App gửi lệnh SCAN_NEW_RFID, biến isLearningMode bật lên true.
+
+	Trong rfidTask: Nếu isLearningMode == true, nó sẽ không mở cửa, mà gửi UID đó lên topic smartlock/rfid/new. App nhận được mã này sẽ 	hiển thị popup cho bạn nhập tên.
+
+- JSON chuẩn:
+
+	Hàm sendLogToApp đã được viết lại để đóng gói JSON đúng chuẩn mà Flutter yêu cầu (user, action, success), giúp App hiển thị Log đẹp.
+
+- MQTT Callback:
+
+	Đã thêm hàm client.setCallback(mqttCallback) để ESP32 lắng nghe lệnh từ App (SCAN, LOCK, UNLOCK).
