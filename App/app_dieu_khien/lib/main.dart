@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
+import 'services/mqtt_service.dart';
 
 void main() {
   runApp(const MyApp());
@@ -15,15 +17,15 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
-        scaffoldBackgroundColor: Colors.grey[100], // Màu nền xám nhẹ cho hiện đại
+        scaffoldBackgroundColor: Colors.grey[100],
       ),
       home: const LoginPage(),
     );
   }
 }alo
 
-// ================== 1. MÀN HÌNH ĐĂNG NHẬP & QUÊN MẬT KHẨU ==================
 
+// ================== LOGIN ==================
 class LoginPage extends StatelessWidget {
   const LoginPage({super.key});
 
@@ -81,7 +83,7 @@ class ForgotPasswordPage extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("Nhập email đã đăng ký để nhận mã reset mật khẩu cho tài khoản Admin.", style: TextStyle(fontSize: 16)),
+            const Text("Nhập email đã đăng ký để nhận mã reset mật khẩu.", style: TextStyle(fontSize: 16)),
             const SizedBox(height: 20),
             const TextField(decoration: InputDecoration(labelText: "Email", border: OutlineInputBorder(), prefixIcon: Icon(Icons.email))),
             const SizedBox(height: 20),
@@ -89,7 +91,7 @@ class ForgotPasswordPage extends StatelessWidget {
               width: double.infinity,
               child: ElevatedButton(
                 onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Đã gửi mã OTP về email! Check inbox nhé.")));
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Đã gửi mã OTP về email!")));
                   Navigator.pop(context);
                 },
                 child: const Text("GỬI YÊU CẦU"),
@@ -102,8 +104,7 @@ class ForgotPasswordPage extends StatelessWidget {
   }
 }
 
-// ================== 2. DASHBOARD (MÀN HÌNH CHÍNH) ==================
-
+// ================== DASHBOARD ==================
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
 
@@ -112,28 +113,65 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage> {
-  bool _isLocked = true; // Trạng thái khóa
+  bool _isLocked = true;
+  final List<Map<String, dynamic>> _logs = [];
+  final MqttService _mqtt = MqttService();
+  
+  @override
+  void initState() {
+    super.initState();
+    _connectAndListen();
+  }
 
-  // Dữ liệu giả lập Log lịch sử
-  final List<Map<String, dynamic>> _logs = [
-    {"time": "10:30 AM", "date": "Hôm nay", "user": "Bố", "action": "Mở bằng RFID", "success": true},
-    {"time": "08:15 AM", "date": "Hôm nay", "user": "Mẹ", "action": "Mở qua App", "success": true},
-    {"time": "09:00 PM", "date": "Hôm qua", "user": "Lạ", "action": "Nhập sai mật khẩu 3 lần", "success": false},
-    {"time": "06:30 PM", "date": "Hôm qua", "user": "Con trai", "action": "Mở bằng vân tay", "success": true},
-  ];
-
-  void _toggleLock() {
-    setState(() {
-      _isLocked = !_isLocked;
-      // Thêm log mới khi bấm nút
-      _logs.insert(0, {
-        "time": "${DateTime.now().hour}:${DateTime.now().minute}",
-        "date": "Vừa xong",
-        "user": "Admin",
-        "action": _isLocked ? "Đã Khóa cửa qua App" : "Đã Mở cửa qua App",
-        "success": true
+  void _connectAndListen() async {
+    await _mqtt.connect();
+    
+    // Lắng nghe log
+    _mqtt.logStream.listen((logData) {
+      if (!mounted) return;
+      setState(() {
+        _logs.insert(0, {
+          "time": _formatTime(DateTime.now()),
+          "date": "Hôm nay",
+          "user": logData['user'] ?? "Unknown",
+          "action": logData['action'] ?? "Hoạt động",
+          "success": logData['success'] ?? false
+        });
       });
     });
+
+    // Lắng nghe trạng thái khóa từ ESP32
+    _mqtt.lockStateStream.listen((locked) {
+      if (!mounted) return;
+      setState(() {
+        _isLocked = locked;
+      });
+    });
+  }
+
+  String _formatTime(DateTime time) {
+    return "${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}";
+  }
+
+  void _toggleLock() async {
+    bool success = await _mqtt.sendCommand(_isLocked ? "UNLOCK" : "LOCK");
+    
+    if (success) {
+      setState(() {
+        _isLocked = !_isLocked;
+        _logs.insert(0, {
+          "time": _formatTime(DateTime.now()),
+          "date": "Vừa xong",
+          "user": "Admin",
+          "action": _isLocked ? "Đã Khóa cửa qua App" : "Đã Mở cửa qua App",
+          "success": true
+        });
+      });
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Lỗi: Không thể kết nối tới khóa!")),
+      );
+    }
   }
 
   @override
@@ -145,10 +183,9 @@ class _DashboardPageState extends State<DashboardPage> {
         backgroundColor: Colors.white,
         elevation: 0,
       ),
-      drawer: const AppDrawer(), // Menu bên trái (được tách ra class riêng bên dưới)
+      drawer: const AppDrawer(),
       body: Column(
         children: [
-          // --- PHẦN 1: TRẠNG THÁI KHÓA (Card to đẹp) ---
           Container(
             margin: const EdgeInsets.all(16),
             padding: const EdgeInsets.all(20),
@@ -159,7 +196,7 @@ class _DashboardPageState extends State<DashboardPage> {
                 end: Alignment.bottomRight,
               ),
               borderRadius: BorderRadius.circular(20),
-              boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 10, offset: const Offset(0, 5))],
+              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))],
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -174,7 +211,6 @@ class _DashboardPageState extends State<DashboardPage> {
                         style: const TextStyle(color: Colors.white70, fontSize: 14)),
                   ],
                 ),
-                // Nút bấm chuyển trạng thái
                 Container(
                   decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), shape: BoxShape.circle),
                   child: IconButton(
@@ -188,46 +224,46 @@ class _DashboardPageState extends State<DashboardPage> {
             ),
           ),
 
-          // --- PHẦN 2: TIÊU ĐỀ LOG ---
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text("Lịch sử hoạt động", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)),
+                const Text("Lịch sử hoạt động", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 TextButton(onPressed: () {}, child: const Text("Xem tất cả")),
               ],
             ),
           ),
 
-          // --- PHẦN 3: DANH SÁCH LOG ---
           Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              itemCount: _logs.length,
-              itemBuilder: (context, index) {
-                final log = _logs[index];
-                final bool isSuccess = log['success'];
-                
-                return Card(
-                  elevation: 2,
-                  margin: const EdgeInsets.only(bottom: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: isSuccess ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1),
-                      child: Icon(
-                        isSuccess ? Icons.check_circle : Icons.warning,
-                        color: isSuccess ? Colors.green : Colors.red,
-                      ),
-                    ),
-                    title: Text(log['action'], style: const TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: Text("${log['user']} • ${log['date']}"),
-                    trailing: Text(log['time'], style: const TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+            child: _logs.isEmpty
+                ? const Center(child: Text("Chưa có hoạt động nào", style: TextStyle(color: Colors.grey)))
+                : ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    itemCount: _logs.length,
+                    itemBuilder: (context, index) {
+                      final log = _logs[index];
+                      final bool isSuccess = log['success'];
+                      
+                      return Card(
+                        elevation: 2,
+                        margin: const EdgeInsets.only(bottom: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: isSuccess ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1),
+                            child: Icon(
+                              isSuccess ? Icons.check_circle : Icons.warning,
+                              color: isSuccess ? Colors.green : Colors.red,
+                            ),
+                          ),
+                          title: Text(log['action'], style: const TextStyle(fontWeight: FontWeight.bold)),
+                          subtitle: Text("${log['user']} • ${log['date']}"),
+                          trailing: Text(log['time'], style: const TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+                        ),
+                      );
+                    },
                   ),
-                );
-              },
-            ),
           ),
         ],
       ),
@@ -235,8 +271,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-// ================== 3. APP DRAWER (MENU) ==================
-
+// ================== DRAWER ==================
 class AppDrawer extends StatelessWidget {
   const AppDrawer({super.key});
 
@@ -249,7 +284,7 @@ class AppDrawer extends StatelessWidget {
           const UserAccountsDrawerHeader(
             accountName: Text("Admin Gia Đình"),
             accountEmail: Text("admin@smartlock.com"),
-            currentAccountPicture: CircleAvatar(backgroundImage: NetworkImage("https://i.pravatar.cc/150?img=12")), // Ảnh giả lập
+            currentAccountPicture: CircleAvatar(child: Icon(Icons.person, size: 50)),
             decoration: BoxDecoration(color: Colors.blueAccent),
           ),
           ListTile(
@@ -270,16 +305,11 @@ class AppDrawer extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.password),
             title: const Text('Đổi mật khẩu khóa'),
-            subtitle: const Text('Mã PIN mở cửa trên thiết bị'),
+            subtitle: const Text('Mã PIN mở cửa'),
             onTap: () {
               Navigator.pop(context);
               Navigator.push(context, MaterialPageRoute(builder: (context) => const ChangeLockPasswordPage()));
             },
-          ),
-          ListTile(
-            leading: const Icon(Icons.wifi),
-            title: const Text('Cấu hình Wifi'),
-            onTap: () {},
           ),
           const Divider(),
           ListTile(
@@ -293,9 +323,7 @@ class AppDrawer extends StatelessWidget {
   }
 }
 
-// ================== 4. CÁC MÀN HÌNH CHỨC NĂNG KHÁC ==================
-
-// --- Đổi mật khẩu CỦA THIẾT BỊ KHÓA (Mã PIN) ---
+// ================== ĐỔI MẬT KHẨU ==================
 class ChangeLockPasswordPage extends StatefulWidget {
   const ChangeLockPasswordPage({super.key});
 
@@ -304,6 +332,11 @@ class ChangeLockPasswordPage extends StatefulWidget {
 }
 
 class _ChangeLockPasswordPageState extends State<ChangeLockPasswordPage> {
+  final TextEditingController _oldPinController = TextEditingController();
+  final TextEditingController _newPinController = TextEditingController();
+  final TextEditingController _confirmPinController = TextEditingController();
+  final MqttService _mqtt = MqttService();
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -320,26 +353,67 @@ class _ChangeLockPasswordPageState extends State<ChangeLockPasswordPage> {
                   children: [
                     Icon(Icons.info_outline, color: Colors.white),
                     SizedBox(width: 10),
-                    Expanded(child: Text("Mã này dùng để nhập trực tiếp trên bàn phím số của khóa cửa.", style: TextStyle(color: Colors.white))),
+                    Expanded(child: Text("Mã này dùng để nhập trực tiếp trên bàn phím của khóa.", style: TextStyle(color: Colors.white))),
                   ],
                 ),
               ),
             ),
             const SizedBox(height: 20),
-            const TextField(decoration: InputDecoration(labelText: "Mã PIN hiện tại", border: OutlineInputBorder()), keyboardType: TextInputType.number, obscureText: true),
+            TextField(
+              controller: _oldPinController,
+              decoration: const InputDecoration(labelText: "Mã PIN hiện tại", border: OutlineInputBorder()),
+              keyboardType: TextInputType.number,
+              obscureText: true,
+              maxLength: 8,
+            ),
             const SizedBox(height: 15),
-            const TextField(decoration: InputDecoration(labelText: "Mã PIN mới (4-6 số)", border: OutlineInputBorder()), keyboardType: TextInputType.number, obscureText: true),
+            TextField(
+              controller: _newPinController,
+              decoration: const InputDecoration(labelText: "Mã PIN mới (4-8 số)", border: OutlineInputBorder()),
+              keyboardType: TextInputType.number,
+              obscureText: true,
+              maxLength: 8,
+            ),
             const SizedBox(height: 15),
-            const TextField(decoration: InputDecoration(labelText: "Nhập lại mã PIN mới", border: OutlineInputBorder()), keyboardType: TextInputType.number, obscureText: true),
+            TextField(
+              controller: _confirmPinController,
+              decoration: const InputDecoration(labelText: "Nhập lại PIN mới", border: OutlineInputBorder()),
+              keyboardType: TextInputType.number,
+              obscureText: true,
+              maxLength: 8,
+            ),
             const SizedBox(height: 30),
             SizedBox(
               width: double.infinity,
               height: 50,
               child: ElevatedButton(
-                onPressed: () {
-                  // Gửi lệnh MQTT xuống ESP32 ở đây
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Đã cập nhật mã PIN thành công!")));
-                  Navigator.pop(context);
+                onPressed: () async {
+                  if (_newPinController.text != _confirmPinController.text) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("PIN xác nhận không khớp!")),
+                    );
+                    return;
+                  }
+
+                  if (_newPinController.text.length < 4) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("PIN phải có ít nhất 4 số!")),
+                    );
+                    return;
+                  }
+
+                  bool success = await _mqtt.sendCommand("CHANGE_PIN:${_newPinController.text}");
+                  
+                  if (success) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("Đã cập nhật mã PIN thành công!")),
+                    );
+                    Navigator.pop(context);
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("Lỗi: Không thể kết nối!")),
+                    );
+                  }
                 },
                 child: const Text("LƯU THAY ĐỔI"),
               ),
@@ -349,9 +423,17 @@ class _ChangeLockPasswordPageState extends State<ChangeLockPasswordPage> {
       ),
     );
   }
+
+  @override
+  void dispose() {
+    _oldPinController.dispose();
+    _newPinController.dispose();
+    _confirmPinController.dispose();
+    super.dispose();
+  }
 }
 
-// --- Quản lý thẻ RFID (Giữ nguyên) ---
+// ================== QUẢN LÝ RFID ==================
 class RfidManagePage extends StatefulWidget {
   const RfidManagePage({super.key});
 
@@ -360,32 +442,196 @@ class RfidManagePage extends StatefulWidget {
 }
 
 class _RfidManagePageState extends State<RfidManagePage> {
-  List<Map<String, String>> rfids = [
-    {"name": "Thẻ của Bố", "id": "A1-B2-C3-D4"},
-    {"name": "Thẻ của Mẹ", "id": "E5-F6-G7-H8"},
-  ];
+  List<Map<String, String>> rfids = [];
+  final MqttService _mqtt = MqttService();
+
+  @override
+  void initState() {
+    super.initState();
+    _mqtt.connect();
+  }
+
+  void _addNewCardProcess() async {
+    StreamSubscription? sub;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text("Đang chờ quét thẻ..."),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 20),
+            Text("1. Chạm thẻ vào khóa", style: TextStyle(fontWeight: FontWeight.bold)),
+            SizedBox(height: 5),
+            Text("2. Đợi 2-3 giây", style: TextStyle(color: Colors.grey)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              sub?.cancel();
+              _mqtt.sendCommand("CANCEL_SCAN");
+              Navigator.pop(dialogContext);
+            },
+            child: const Text("Hủy", style: TextStyle(color: Colors.red)),
+          )
+        ],
+      ),
+    );
+
+    bool success = await _mqtt.sendCommand("SCAN_NEW_RFID");
+
+    if (success) {
+      sub = _mqtt.rfidStream.listen((rfidCode) {
+        if (mounted && Navigator.canPop(context)) {
+          Navigator.pop(context);
+        }
+        sub?.cancel();
+        _showNameInput(rfidCode);
+      });
+
+      // Timeout 30s
+      Future.delayed(const Duration(seconds: 30), () {
+        if (mounted && Navigator.canPop(context)) {
+          Navigator.pop(context);
+          sub?.cancel();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Hết thời gian! Không phát hiện thẻ.")),
+          );
+        }
+      });
+    } else {
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Lỗi: Không kết nối được!")),
+      );
+    }
+  }
+
+  void _showNameInput(String code) {
+    TextEditingController controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Thẻ mới phát hiện!"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text("Mã thẻ: $code", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
+            const SizedBox(height: 15),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                labelText: "Tên chủ thẻ",
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.person),
+              ),
+              autofocus: true,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Hủy"),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (controller.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Vui lòng nhập tên!")),
+                );
+                return;
+              }
+
+              setState(() {
+                rfids.add({"name": controller.text.trim(), "id": code});
+              });
+
+              await _mqtt.sendCommand("SAVE_CARD:$code:${controller.text.trim()}");
+              Navigator.pop(context);
+              
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text("Đã thêm thẻ ${controller.text.trim()}")),
+              );
+            },
+            child: const Text("Lưu"),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Quản lý thẻ từ")),
-      body: ListView.builder(
-        itemCount: rfids.length,
-        itemBuilder: (context, index) {
-          return ListTile(
-            leading: const Icon(Icons.credit_card, size: 40, color: Colors.blue),
-            title: Text(rfids[index]['name']!),
-            subtitle: Text("ID: ${rfids[index]['id']}"),
-            trailing: IconButton(
-              icon: const Icon(Icons.delete, color: Colors.red),
-              onPressed: () => setState(() => rfids.removeAt(index)),
+      appBar: AppBar(title: const Text("Quản lý thẻ RFID")),
+      body: rfids.isEmpty
+          ? const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.nfc, size: 80, color: Colors.grey),
+                  SizedBox(height: 20),
+                  Text("Chưa có thẻ nào", style: TextStyle(fontSize: 18, color: Colors.grey)),
+                  SizedBox(height: 10),
+                  Text("Nhấn nút + để thêm thẻ", style: TextStyle(color: Colors.grey)),
+                ],
+              ),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: rfids.length,
+              itemBuilder: (context, index) => Card(
+                elevation: 2,
+                margin: const EdgeInsets.only(bottom: 12),
+                child: ListTile(
+                  leading: const CircleAvatar(child: Icon(Icons.credit_card)),
+                  title: Text(rfids[index]['name']!, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text("ID: ${rfids[index]['id']!}"),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete, color: Colors.red),
+                    onPressed: () async {
+                      bool? confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text("Xác nhận xóa"),
+                          content: Text("Xóa thẻ ${rfids[index]['name']}?"),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, false),
+                              child: const Text("Hủy"),
+                            ),
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                              onPressed: () => Navigator.pop(context, true),
+                              child: const Text("Xóa"),
+                            ),
+                          ],
+                        ),
+                      );
+
+                      if (confirm == true) {
+                        await _mqtt.sendCommand("DELETE:${rfids[index]['id']}");
+                        setState(() => rfids.removeAt(index));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text("Đã xóa thẻ")),
+                        );
+                      }
+                    },
+                  ),
+                ),
+              ),
             ),
-          );
-        },
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {}, // Thêm logic add thẻ
-        child: const Icon(Icons.add),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _addNewCardProcess,
+        icon: const Icon(Icons.add),
+        label: const Text("Thêm thẻ"),
       ),
     );
   }

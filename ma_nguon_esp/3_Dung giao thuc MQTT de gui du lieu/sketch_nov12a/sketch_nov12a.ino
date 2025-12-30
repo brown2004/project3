@@ -61,8 +61,8 @@ String validUIDs[] = {
 const int validUIDCount = sizeof(validUIDs) / sizeof(validUIDs[0]);
 
 // WiFi
-const char* ssid = "Quang Teo";
-const char* password = "19091979";
+const char* ssid = "Duong";
+const char* password = "00000000";
 
 // MQTT
 const char* mqttServer = "broker.hivemq.com";
@@ -99,7 +99,7 @@ void reconnectMQTT() {
 }
 // MQTT
 void sendMQTT(const String &status, const String &method, const String &uidOrPass="") {
-  if (!client.connected()) reconnectMQTT();
+  if (!client.connected()) return;
 
   String payload = "{";
   payload += "\"status\":\"" + status + "\",";
@@ -140,7 +140,7 @@ void showUnlockMessage() {
 
 
 
-// Hiển thị trạng thái RFID
+// Kiem tra Rfid hop le
 bool isValidUID(const String &uid) {
   for (int i = 0; i < validUIDCount; i++) {
     if (uid == validUIDs[i]) return true;
@@ -292,7 +292,7 @@ void rfidTask(void *pvParameters) {
 void setup() {
   Serial.begin(115200);
   Wire.begin(21, 22); // SDA=21, SCL=22
-  setupWiFi();
+  
   client.setServer(mqttServer, mqttPort);
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
@@ -319,6 +319,7 @@ void setup() {
 
   xTaskCreatePinnedToCore(keypadTask, "KeypadTask", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(rfidTask, "RFIDTask", 4096, NULL, 1, NULL, 1);
+  setupWiFi();
 }
 
 void loop() {
