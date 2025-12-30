@@ -1,5 +1,7 @@
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
+import 'package:mqtt_client/mqtt_browser_client.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:async';
 import 'dart:convert';
 
@@ -9,7 +11,8 @@ class MqttService {
   factory MqttService() => _instance;
   MqttService._internal();
 
-  MqttServerClient? client;
+  // MqttClient chung cho cả server/browser
+  MqttClient? client;
   bool isConnected = false;
 
   // Stream controllers
@@ -26,7 +29,7 @@ class MqttService {
   Stream<bool> get lockStateStream => _lockStateController.stream;
 
   // Thông tin kết nối
-  final String broker = 'broker.hivemq.com';
+  final String broker = 'localhost';
   final int port = 1883;
   final String clientId = 'flutter_smart_lock_${DateTime.now().millisecondsSinceEpoch}';
   
@@ -43,13 +46,26 @@ class MqttService {
     }
 
     try {
-      client = MqttServerClient.withPort(broker, clientId, port);
-      client!.logging(on: false);
-      client!.keepAlivePeriod = 60;
-      client!.autoReconnect = true;
-      client!.onConnected = _onConnected;
-      client!.onDisconnected = _onDisconnected;
-      client!.onSubscribed = _onSubscribed;
+      // Tạo client khác nhau tùy nền tảng để tránh lỗi SecurityContext trên Web
+      if (kIsWeb) {
+        // Sử dụng WebSocket cho web (HiveMQ public websocket tại 8000 với path /mqtt)
+        final String wsUri = 'ws://$broker:8000/mqtt';
+        client = MqttBrowserClient(wsUri, clientId);
+        client!.logging(on: false);
+        client!.keepAlivePeriod = 60;
+        // NOTE: autoReconnect không hỗ trợ trên browser client trong một số version
+        client!.onConnected = _onConnected;
+        client!.onDisconnected = _onDisconnected;
+        client!.onSubscribed = _onSubscribed;
+      } else {
+        client = MqttServerClient.withPort(broker, clientId, port);
+        client!.logging(on: false);
+        client!.keepAlivePeriod = 60;
+        client!.autoReconnect = true;
+        client!.onConnected = _onConnected;
+        client!.onDisconnected = _onDisconnected;
+        client!.onSubscribed = _onSubscribed;
+      }
 
       final connMessage = MqttConnectMessage()
           .withClientIdentifier(clientId)
@@ -65,7 +81,7 @@ class MqttService {
         print(' MQTT kết nối thành công!');
         isConnected = true;
         _subscribeToTopics();
-        client!.updates!.listen(_onMessage);
+        client!.updates?.listen(_onMessage);
       } else {
         print(' MQTT kết nối thất bại');
         client!.disconnect();
