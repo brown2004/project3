@@ -1,204 +1,148 @@
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
-import 'package:mqtt_client/mqtt_browser_client.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 class MqttService {
-  // Singleton
   static final MqttService _instance = MqttService._internal();
   factory MqttService() => _instance;
   MqttService._internal();
 
-  // MqttClient chung cho cả server/browser
-  MqttClient? client;
-  bool isConnected = false;
+  MqttServerClient? client;
+  
+  // Stream Controllers
+  final StreamController<Map<String, dynamic>> _logController = StreamController.broadcast();
+  final StreamController<String> _rfidController = StreamController.broadcast();
+  final StreamController<bool> _lockStateController = StreamController.broadcast();
 
-  // Stream controllers
-  final StreamController<Map<String, dynamic>> _logController = 
-      StreamController<Map<String, dynamic>>.broadcast();
-  final StreamController<String> _rfidController = 
-      StreamController<String>.broadcast();
-  final StreamController<bool> _lockStateController = 
-      StreamController<bool>.broadcast();
-
-  // Public streams
+  // Public Getters
   Stream<Map<String, dynamic>> get logStream => _logController.stream;
   Stream<String> get rfidStream => _rfidController.stream;
   Stream<bool> get lockStateStream => _lockStateController.stream;
 
-  // Thông tin kết nối
-  final String broker = 'localhost';
+  // ================= CẤU HÌNH IP Ở ĐÂY =================
+  // 1. Nếu chạy máy ảo Android (Emulator): Dùng '10.0.2.2'
+  // 2. Nếu chạy điện thoại thật (cùng Wifi): Dùng IP LAN của máy tính (VD: '192.168.1.12')
+  // 3. Mở CMD gõ 'ipconfig' để xem IPv4 Address
+  final String broker = '192.168.34.1'; // <--- SỬA DÒNG NÀY
   final int port = 1883;
-  final String clientId = 'flutter_smart_lock_${DateTime.now().millisecondsSinceEpoch}';
   
-  // Topics - PHẢI KHỚP VỚI ESP32
   final String topicCommand = 'smartlock/command';
   final String topicLog = 'smartlock/log';
   final String topicRfid = 'smartlock/rfid';
   final String topicStatus = 'smartlock/status';
 
   Future<void> connect() async {
-    if (isConnected && client?.connectionStatus?.state == MqttConnectionState.connected) {
-      print(' MQTT đã kết nối rồi!');
+    // Nếu đã kết nối thì thôi
+    if (client != null && client!.connectionStatus!.state == MqttConnectionState.connected) {
+      print('✅ Đã kết nối rồi, không cần connect lại.');
       return;
     }
 
+    // Tạo ID ngẫu nhiên để không bị đá văng khi connect nhiều lần
+    String clientId = 'flutter_app_${DateTime.now().millisecondsSinceEpoch}';
+    
+    client = MqttServerClient(broker, clientId);
+    client!.port = port;
+    client!.logging(on: true); // Bật log để debug lỗi kết nối
+    client!.keepAlivePeriod = 60;
+    client!.onDisconnected = _onDisconnected;
+    client!.onConnected = _onConnected;
+    client!.onSubscribed = _onSubscribed;
+
+    final connMess = MqttConnectMessage()
+        .withClientIdentifier(clientId)
+        .startClean() // Quan trọng: Start session mới sạch sẽ
+        .withWillQos(MqttQos.atLeastOnce);
+    client!.connectionMessage = connMess;
+
     try {
-      // Tạo client khác nhau tùy nền tảng để tránh lỗi SecurityContext trên Web
-      if (kIsWeb) {
-        // Sử dụng WebSocket cho web (HiveMQ public websocket tại 8000 với path /mqtt)
-        final String wsUri = 'ws://$broker:8000/mqtt';
-        client = MqttBrowserClient(wsUri, clientId);
-        client!.logging(on: false);
-        client!.keepAlivePeriod = 60;
-        // NOTE: autoReconnect không hỗ trợ trên browser client trong một số version
-        client!.onConnected = _onConnected;
-        client!.onDisconnected = _onDisconnected;
-        client!.onSubscribed = _onSubscribed;
-      } else {
-        client = MqttServerClient.withPort(broker, clientId, port);
-        client!.logging(on: false);
-        client!.keepAlivePeriod = 60;
-        client!.autoReconnect = true;
-        client!.onConnected = _onConnected;
-        client!.onDisconnected = _onDisconnected;
-        client!.onSubscribed = _onSubscribed;
-      }
-
-      final connMessage = MqttConnectMessage()
-          .withClientIdentifier(clientId)
-          .startClean()
-          .withWillQos(MqttQos.atMostOnce);
-      
-      client!.connectionMessage = connMessage;
-
-      print('🔄 Đang kết nối MQTT...');
+      print('⏳ Đang kết nối tới $broker ...');
       await client!.connect();
-
-      if (client!.connectionStatus!.state == MqttConnectionState.connected) {
-        print(' MQTT kết nối thành công!');
-        isConnected = true;
-        _subscribeToTopics();
-        client!.updates?.listen(_onMessage);
-      } else {
-        print(' MQTT kết nối thất bại');
-        client!.disconnect();
-        isConnected = false;
-      }
+    } on NoConnectionException catch (e) {
+      print('❌ Client exception: $e');
+      client!.disconnect();
+    } on SocketException catch (e) {
+      print('❌ Socket exception: $e');
+      client!.disconnect();
     } catch (e) {
-      print(' Lỗi kết nối MQTT: $e');
-      isConnected = false;
+      print('❌ Lỗi lạ: $e');
+      client!.disconnect();
+    }
+
+    // Kiểm tra lại trạng thái
+    if (client!.connectionStatus!.state == MqttConnectionState.connected) {
+      print('✅ KẾT NỐI THÀNH CÔNG MOSQUITTO LOCAL');
+      _subscribeTopics();
+      
+      // Lắng nghe tin nhắn trả về
+      client!.updates!.listen((List<MqttReceivedMessage<MqttMessage?>>? c) {
+        final recMess = c![0].payload as MqttPublishMessage;
+        final payload = MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
+        final topic = c[0].topic;
+        
+        print('📩 Nhận tin từ [$topic]: $payload');
+        _handleMessage(topic, payload);
+      });
+    } else {
+      print('❌ Kết nối thất bại - Check lại IP và Firewall');
+      client!.disconnect();
     }
   }
 
-  void _subscribeToTopics() {
-    client?.subscribe(topicLog, MqttQos.atMostOnce);
-    client?.subscribe(topicRfid, MqttQos.atMostOnce);
-    client?.subscribe(topicStatus, MqttQos.atMostOnce);
-    print('📡 Đã subscribe topics');
+  void _subscribeTopics() {
+    client!.subscribe(topicLog, MqttQos.atMostOnce);
+    client!.subscribe(topicRfid, MqttQos.atMostOnce);
+    client!.subscribe(topicStatus, MqttQos.atMostOnce);
   }
 
-  void _onConnected() {
-    print(' MQTT Connected');
-    isConnected = true;
-  }
-
-  void _onDisconnected() {
-    print('MQTT Disconnected');
-    isConnected = false;
-  }
-
-  void _onSubscribed(String topic) {
-    print(' Subscribed to: $topic');
-  }
-
-  void _onMessage(List<MqttReceivedMessage<MqttMessage>> event) {
-    final MqttPublishMessage message = event[0].payload as MqttPublishMessage;
-    final String topic = event[0].topic;
-    final String payload = MqttPublishPayload.bytesToStringAsString(message.payload.message);
-
-    print(' Message từ $topic: $payload');
-
+  void _handleMessage(String topic, String payload) {
     try {
-      final data = jsonDecode(payload);
+      // Parse JSON nếu có thể
+      var data;
+      try {
+         data = jsonDecode(payload);
+      } catch(e) {
+         data = payload; // Nếu không phải JSON thì để nguyên String
+      }
 
-      if (topic == topicLog) {
+      if (topic == topicLog && data is Map<String, dynamic>) {
         _logController.add(data);
       } else if (topic == topicRfid) {
-        String rfidCode = data['rfid'] ?? data['code'] ?? payload;
-        _rfidController.add(rfidCode);
+        // Xử lý linh hoạt cả JSON lẫn String thuần
+        String code = (data is Map) ? (data['rfid'] ?? data['code']) : data.toString();
+        _rfidController.add(code);
       } else if (topic == topicStatus) {
-        _lockStateController.add(data['locked'] ?? false);
+        bool isLocked = (data is Map) ? (data['locked'] ?? true) : (payload == 'LOCK');
+        _lockStateController.add(isLocked);
       }
     } catch (e) {
-      print(' Lỗi parse JSON: $e');
-      if (topic == topicRfid) {
-        _rfidController.add(payload);
-      }
+      print('⚠️ Lỗi parse data: $e');
     }
   }
 
-  // Đổi thành Future<bool>
   Future<bool> sendCommand(String command) async {
-    if (!isConnected || client == null) {
-      print('MQTT chưa kết nối, không thể gửi lệnh!');
-      return false;
+    if (client?.connectionStatus?.state != MqttConnectionState.connected) {
+      print('⚠️ Chưa kết nối MQTT, đang thử kết nối lại...');
+      await connect();
+      if (client?.connectionStatus?.state != MqttConnectionState.connected) return false;
     }
 
+    final builder = MqttClientPayloadBuilder();
+    builder.addString(command);
+    
     try {
-      final builder = MqttClientPayloadBuilder();
-      builder.addString(command);
-      
-      client!.publishMessage(
-        topicCommand, 
-        MqttQos.atLeastOnce, 
-        builder.payload!
-      );
-      
-      print(' Đã gửi lệnh: $command');
+      client!.publishMessage(topicCommand, MqttQos.atLeastOnce, builder.payload!);
+      print('📤 Đã gửi lệnh: $command');
       return true;
     } catch (e) {
-      print(' Lỗi gửi lệnh: $e');
+      print('❌ Lỗi gửi lệnh: $e');
       return false;
     }
   }
 
-  Future<bool> sendJson(Map<String, dynamic> data) async {
-    if (!isConnected || client == null) {
-      print(' MQTT chưa kết nối!');
-      return false;
-    }
-
-    try {
-      final builder = MqttClientPayloadBuilder();
-      builder.addString(jsonEncode(data));
-      
-      client!.publishMessage(
-        topicCommand, 
-        MqttQos.atLeastOnce, 
-        builder.payload!
-      );
-      
-      print(' Đã gửi JSON: $data');
-      return true;
-    } catch (e) {
-      print(' Lỗi gửi JSON: $e');
-      return false;
-    }
-  }
-
-  void disconnect() {
-    client?.disconnect();
-    isConnected = false;
-    print(' Đã ngắt kết nối MQTT');
-  }
-
-  void dispose() {
-    disconnect();
-    _logController.close();
-    _rfidController.close();
-    _lockStateController.close();
-  }
+  void _onConnected() => print('Mosquitto Connected');
+  void _onDisconnected() => print('Mosquitto Disconnected');
+  void _onSubscribed(String topic) => print('Subscribed to $topic');
 }

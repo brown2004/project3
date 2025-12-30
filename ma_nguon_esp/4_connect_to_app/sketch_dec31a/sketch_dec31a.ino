@@ -66,7 +66,7 @@ const char* ssid = "Duong";
 const char* password = "00000000";
 
 // MQTT
-const char* mqttServer = "localhost";
+const char* mqttServer = "172.20.10.5";
 const int mqttPort = 1883;
 const char* mqttClientId = "ESP32_SmartLock";
 
