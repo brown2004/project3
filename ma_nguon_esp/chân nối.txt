@@ -1,9 +1,9 @@
 
 
-SDA/SS  → D5   ← Giữ nguyên
-SCK     → D18  ← ĐỔI từ D15
-MOSI    → D23  ← Giữ nguyên
-MISO    → D19  ← ĐỔI từ D35
-RST     → D4   ← Giữ nguyên
+SDA/SS  → D5   
+SCK     → D18  
+MOSI    → D23  
+MISO    → D19 
+RST     → D4  
 3.3V    → 3.3V
 GND     → GND
