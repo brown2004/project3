@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'services/mqtt_service.dart';
+import 'services/log_service.dart';
 
 void main() {
   runApp(const MyApp());
@@ -18,18 +20,13 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
         scaffoldBackgroundColor: Colors.grey[100],
-        // cardTheme: const CardTheme(surfaceTintColor: Colors.white), // <--- NẾU VẪN LỖI THÌ XÓA HẲN DÒNG NÀY ĐI
       ),
-      // Nếu xóa dòng trên mà vẫn lỗi, hãy thử thay bằng:
-      // cardTheme: const CardThemeData(surfaceTintColor: Colors.white), 
-      // Nhưng tốt nhất là xóa đi cho nhẹ nợ.
-      
       home: const LoginPage(),
     );
   }
 }
 
-// ================== HELPER MIXIN (PHIÊN BẢN FINAL) ==================
+// ================== MIXIN XỬ LÝ FEEDBACK ==================
 mixin MqttFeedbackHandler<T extends StatefulWidget> on State<T> {
   final MqttService mqtt = MqttService();
 
@@ -39,60 +36,39 @@ mixin MqttFeedbackHandler<T extends StatefulWidget> on State<T> {
     String expectedAction,
     {int timeoutSeconds = 5}
   ) async {
-    // 1. Hiện Loading
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (c) => const Center(child: CircularProgressIndicator()),
     );
 
-    print("🟡 [APP] Gửi lệnh: $command");
-
-    // 2. GIĂNG BẪY (LẮNG NGHE) TRƯỚC
     var responseFuture = mqtt.logStream.firstWhere((logData) {
-      // In ra xem App đang nghe thấy cái gì
-      print("👀 [LISTENER] Nghe thấy: $logData");
-      
-      // So sánh Action
       String incoming = logData['action'].toString();
-      bool match = incoming == expectedAction;
-      
-      if (match) print("✅ [LISTENER] Bắt được tin nhắn khớp!");
-      return match;
+      return incoming == expectedAction;
     }).timeout(Duration(seconds: timeoutSeconds));
 
-    // 3. GỬI LỆNH (Delay 50ms để chắc chắn Listener đã bật)
     await Future.delayed(const Duration(milliseconds: 50));
     mqtt.sendCommand(command);
 
     try {
-      // 4. CHỜ KẾT QUẢ
       var response = await responseFuture;
 
       if (!mounted) return null;
-      Navigator.pop(context); // Tắt loading NGAY
+      Navigator.pop(context); 
 
-      // 5. XỬ LÝ
       if (response['success'] == true) {
         return response; 
       } else {
-        // Xử lý lỗi từ ESP32 gửi về (Ví dụ: Thẻ đã tồn tại)
-        String msg = response['message'] ?? "Thất bại";
-        print("🟠 [APP] ESP32 báo lỗi: $msg");
-        
-        // Việt hóa thông báo cho thân thiện
-        if (msg.contains("ton tai")) msg = "Thẻ này đã tồn tại!";
-        if (msg.contains("du 10 the")) msg = "Bộ nhớ đầy!";
-        
-        _showSnack(context, "⚠️ $msg", Colors.orange);
+        String msg = response['message'] ?? "That bai";
+        if (msg.contains("ton tai")) msg = "The nay da ton tai";
+        if (msg.contains("du 10 the")) msg = "Bo nho day";
+        _showSnack(context, "Loi: $msg", Colors.orange);
         return null;
       }
-
     } catch (e) {
-      print("🔴 [APP] Lỗi hoặc Timeout: $e");
       if (mounted) {
-        Navigator.pop(context); // Tắt loading
-        _showSnack(context, "⚠️ Không phản hồi (Timeout)!", Colors.red);
+        Navigator.pop(context);
+        _showSnack(context, "Khong phan hoi (Timeout)", Colors.red);
       }
       return null;
     }
@@ -105,7 +81,7 @@ mixin MqttFeedbackHandler<T extends StatefulWidget> on State<T> {
   }
 }
 
-// ================== LOGIN ==================
+// ================== LOGIN PAGE ==================
 class LoginPage extends StatelessWidget {
   const LoginPage({super.key});
 
@@ -123,9 +99,9 @@ class LoginPage extends StatelessWidget {
               const SizedBox(height: 20),
               const Text("SMART LOCK ADMIN", style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
               const SizedBox(height: 40),
-              const TextField(decoration: InputDecoration(labelText: "Tài khoản", prefixIcon: Icon(Icons.person), border: OutlineInputBorder())),
+              const TextField(decoration: InputDecoration(labelText: "Tai khoan", prefixIcon: Icon(Icons.person), border: OutlineInputBorder())),
               const SizedBox(height: 15),
-              const TextField(decoration: InputDecoration(labelText: "Mật khẩu", prefixIcon: Icon(Icons.lock), border: OutlineInputBorder()), obscureText: true),
+              const TextField(decoration: InputDecoration(labelText: "Mat khau", prefixIcon: Icon(Icons.lock), border: OutlineInputBorder()), obscureText: true),
               const SizedBox(height: 20),
               SizedBox(
                 width: double.infinity,
@@ -133,7 +109,7 @@ class LoginPage extends StatelessWidget {
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white),
                   onPressed: () => Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const DashboardPage())),
-                  child: const Text("ĐĂNG NHẬP", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  child: const Text("DANG NHAP", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 ),
               ),
             ],
@@ -144,7 +120,7 @@ class LoginPage extends StatelessWidget {
   }
 }
 
-// ================== DASHBOARD ==================
+// ================== DASHBOARD PAGE ==================
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
 
@@ -155,29 +131,92 @@ class DashboardPage extends StatefulWidget {
 class _DashboardPageState extends State<DashboardPage> with MqttFeedbackHandler {
   bool _isLocked = true;
   final List<Map<String, dynamic>> _logs = [];
+  final LogService _logService = LogService();
   
   @override
   void initState() {
     super.initState();
+    _loadLogsFromStorage();
     _connectAndSync();
+  }
+
+  void _loadLogsFromStorage() async {
+    List<Map<String, dynamic>> savedLogs = await _logService.loadLogs();
+    if (mounted) {
+      setState(() {
+        _logs.addAll(savedLogs);
+      });
+    }
   }
 
   void _connectAndSync() async {
     await mqtt.connect();
     mqtt.sendCommand("SYNC_REQ");
     
-    mqtt.logStream.listen((logData) {
+    // === LẮNG NGHE LOG ===
+    mqtt.logStream.listen((logData) async { // Thêm async
       if (!mounted) return;
-      if (logData.containsKey('user')) {
-        setState(() {
-          _logs.insert(0, {
-            "time": _formatTime(DateTime.now()),
-            "user": logData['user'],
-            "action": logData['action'],
-            "success": logData['success'] ?? false
-          });
-        });
+      
+      String actionStr = logData['action']?.toString() ?? "";
+      
+      // 1. Lọc bỏ tin rác
+      if (actionStr == "SYNC_REQ" || 
+          actionStr == "SCAN_NEW_RFID" || 
+          actionStr == "CANCEL_SCAN" ||
+          actionStr == "SYNC_PIN" ||
+          actionStr == "SYNC_CARDS") {
+        return; 
       }
+
+      if (logData.containsKey('message') && !logData.containsKey('user')) {
+        return;
+      }
+
+      // 2. Lọc trùng
+      if (_isLocked == false) { 
+        String actLower = actionStr.toLowerCase();
+        if (actLower.contains('mo') || actLower.contains('unlock') || actLower.contains('open')) {
+          return; 
+        }
+      }
+
+      String userStr = logData['user']?.toString() ?? "System";
+      
+      // === [SỬA LẠI] LOGIC HIỂN THỊ TÊN CHUẨN ===
+      if (userStr.startsWith("RFID:")) {
+        try {
+          // Lấy UID bằng cách cắt chuỗi từ ký tự thứ 5 trở đi
+          // Ví dụ: "RFID:47:60:3E:05" -> "47:60:3E:05"
+          String uid = userStr.substring(5).trim(); 
+          
+          final prefs = await SharedPreferences.getInstance();
+          String? savedName = prefs.getString('card_name_$uid'); 
+          
+          if (savedName != null && savedName.isNotEmpty) {
+            userStr = savedName; // Hiển thị tên người dùng
+          } else {
+            userStr = "Thẻ lạ: $uid"; // Hiển thị mã nếu chưa lưu
+          }
+        } catch (e) {
+          print("Lỗi parse tên thẻ: $e");
+        }
+      }
+      // ==========================================
+
+      bool isSuccess = logData['success'] == true;
+
+      Map<String, dynamic> newLog = {
+        "time": _formatTime(DateTime.now()),
+        "user": userStr,
+        "action": actionStr,
+        "success": isSuccess
+      };
+      
+      setState(() {
+        _logs.insert(0, newLog);
+      });
+      
+      _logService.addLog(newLog);
     });
 
     mqtt.lockStateStream.listen((locked) {
@@ -192,17 +231,12 @@ class _DashboardPageState extends State<DashboardPage> with MqttFeedbackHandler 
     var result = await sendCommandWithFeedback(context, command, command);
     
     if (result != null) {
-      setState(() {
-        _isLocked = !_isLocked;
-        _logs.insert(0, {
-          "time": _formatTime(DateTime.now()),
-          "user": "Admin App",
-          "action": _isLocked ? "Đã Khóa" : "Đã Mở",
-          "success": true
-        });
-      });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("✅ ${result['message']}"), backgroundColor: Colors.green),
+        SnackBar(
+          content: Text("Thanh cong: ${result['message']}"), 
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 1),
+        ),
       );
     }
   }
@@ -210,7 +244,7 @@ class _DashboardPageState extends State<DashboardPage> with MqttFeedbackHandler 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Dashboard Điều Khiển"), centerTitle: true),
+      appBar: AppBar(title: const Text("Dashboard Dieu Khien"), centerTitle: true),
       drawer: const AppDrawer(),
       body: Column(
         children: [
@@ -230,10 +264,10 @@ class _DashboardPageState extends State<DashboardPage> with MqttFeedbackHandler 
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(_isLocked ? "ĐANG KHÓA" : "ĐÃ MỞ", 
+                    Text(_isLocked ? "DANG KHOA" : "DA MO", 
                         style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 5),
-                    Text(_isLocked ? "An toàn" : "Cảnh báo: Cửa đang mở", 
+                    Text(_isLocked ? "An toan" : "Canh bao: Cua dang mo", 
                         style: const TextStyle(color: Colors.white70, fontSize: 14)),
                   ],
                 ),
@@ -250,14 +284,45 @@ class _DashboardPageState extends State<DashboardPage> with MqttFeedbackHandler 
             ),
           ),
 
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-            child: Align(alignment: Alignment.centerLeft, child: Text("Lịch sử hoạt động", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Lich su hoat dong", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                TextButton.icon(
+                  onPressed: () async {
+                    bool? confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (c) => AlertDialog(
+                        title: const Text("Xoa lich su"),
+                        content: const Text("Ban co chac muon xoa toan bo lich su?"),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text("Huy")),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                            onPressed: () => Navigator.pop(c, true),
+                            child: const Text("Xoa"),
+                          ),
+                        ],
+                      ),
+                    );
+                    
+                    if (confirm == true) {
+                      await _logService.clearAllLogs();
+                      setState(() => _logs.clear());
+                    }
+                  },
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  label: const Text("Xoa", style: TextStyle(fontSize: 14)),
+                ),
+              ],
+            ),
           ),
 
           Expanded(
             child: _logs.isEmpty
-                ? const Center(child: Text("Chưa có hoạt động nào", style: TextStyle(color: Colors.grey)))
+                ? const Center(child: Text("Chua co hoat dong nao", style: TextStyle(color: Colors.grey)))
                 : ListView.builder(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     itemCount: _logs.length,
@@ -285,7 +350,7 @@ class _DashboardPageState extends State<DashboardPage> with MqttFeedbackHandler 
   }
 }
 
-// ================== QUẢN LÝ RFID ==================
+// ================== RFID MANAGE PAGE ==================
 class RfidManagePage extends StatefulWidget {
   const RfidManagePage({super.key});
 
@@ -307,17 +372,26 @@ class _RfidManagePageState extends State<RfidManagePage> with MqttFeedbackHandle
     await mqtt.connect();
     mqtt.sendCommand("SYNC_REQ"); 
     
-    mqtt.logStream.listen((logData) {
+    mqtt.logStream.listen((logData) async { // Thêm async
       if (logData['type'] == 'SYNC_CARDS' && mounted) {
         List<dynamic> cards = logData['cards'] ?? [];
+        
+        // Load tên thẻ từ bộ nhớ máy
+        final prefs = await SharedPreferences.getInstance();
+        List<Map<String, String>> tempRfids = [];
+
+        for (var cardId in cards) {
+          String uid = cardId.toString();
+          // Lấy tên đã lưu, nếu không có thì ghi "Thẻ chưa đặt tên"
+          String name = prefs.getString('card_name_$uid') ?? "The chua dat ten";
+          tempRfids.add({
+            "name": name,
+            "id": uid
+          });
+        }
+
         setState(() {
-          rfids.clear();
-          for (int i = 0; i < cards.length; i++) {
-            rfids.add({
-              "name": "Thẻ ${i + 1}",
-              "id": cards[i].toString()
-            });
-          }
+          rfids = tempRfids;
           _isLoading = false;
         });
       }
@@ -333,15 +407,15 @@ class _RfidManagePageState extends State<RfidManagePage> with MqttFeedbackHandle
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
-        title: const Text("Đang chờ quét thẻ..."),
+        title: const Text("Dang cho quet the..."),
         content: const Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             CircularProgressIndicator(),
             SizedBox(height: 20),
-            Text("1. Chạm thẻ vào khóa", style: TextStyle(fontWeight: FontWeight.bold)),
+            Text("1. Cham the vao khoa", style: TextStyle(fontWeight: FontWeight.bold)),
             SizedBox(height: 5),
-            Text("2. Tự hủy sau 10 giây", style: TextStyle(color: Colors.grey)),
+            Text("2. Tu huy sau 10 giay", style: TextStyle(color: Colors.grey)),
           ],
         ),
         actions: [
@@ -350,7 +424,7 @@ class _RfidManagePageState extends State<RfidManagePage> with MqttFeedbackHandle
               Navigator.pop(dialogContext);
               mqtt.sendCommand("CANCEL_SCAN");
             },
-            child: const Text("Hủy", style: TextStyle(color: Colors.red)),
+            child: const Text("Huy", style: TextStyle(color: Colors.red)),
           )
         ],
       ),
@@ -369,7 +443,7 @@ class _RfidManagePageState extends State<RfidManagePage> with MqttFeedbackHandle
       if (!mounted) return;
       Navigator.pop(context);
       mqtt.sendCommand("CANCEL_SCAN"); 
-      _showSnack(context, "Hết thời gian! Đã hủy chế độ thêm.", Colors.red);
+      _showSnack(context, "Het thoi gian! Da huy che do them.", Colors.red);
     }
   }
 
@@ -377,49 +451,50 @@ class _RfidManagePageState extends State<RfidManagePage> with MqttFeedbackHandle
     TextEditingController controller = TextEditingController();
     
     showDialog(
-      context: context, // Context của trang cha (RfidManagePage)
-      // ĐỔI TÊN BIẾN Ở ĐÂY TỪ context THÀNH dialogContext ĐỂ TRÁNH NHẦM
+      context: context,
       builder: (dialogContext) => AlertDialog( 
-        title: const Text("Thẻ mới phát hiện!"),
+        title: const Text("The moi phat hien!"),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text("Mã thẻ: $code", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
+            Text("Ma the: $code", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
             const SizedBox(height: 15),
             TextField(
               controller: controller,
-              decoration: const InputDecoration(labelText: "Tên chủ thẻ", border: OutlineInputBorder(), prefixIcon: Icon(Icons.person)),
+              decoration: const InputDecoration(labelText: "Ten chu the", border: OutlineInputBorder(), prefixIcon: Icon(Icons.person)),
               autofocus: true,
             ),
           ],
         ),
         actions: [
-          // Dùng dialogContext để đóng hộp thoại nhập tên
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text("Hủy")),
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text("Huy")),
           
           ElevatedButton(
             onPressed: () async {
-              if (controller.text.trim().isEmpty) return;
+              String name = controller.text.trim();
+              if (name.isEmpty) return;
               
-              // 1. Đóng hộp thoại nhập tên trước (Dùng dialogContext)
               Navigator.pop(dialogContext);
               
-              // 2. Gọi lệnh Lưu (QUAN TRỌNG: DÙNG context CỦA TRANG, KHÔNG DÙNG dialogContext)
-              // Biến 'context' này lấy từ State<RfidManagePage>, nó vẫn còn sống.
               var result = await sendCommandWithFeedback(
                 context, 
-                "SAVE_CARD:$code:${controller.text.trim()}", 
+                "SAVE_CARD:$code:$name", // Gửi lệnh lưu
                 "SAVE_CARD"
               );
 
               if (result != null) {
+                // === LƯU TÊN VÀO BỘ NHỚ ===
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString('card_name_$code', name);
+                // ==========================
+
                 setState(() {
-                  rfids.add({"name": controller.text.trim(), "id": code});
+                  rfids.add({"name": name, "id": code});
                 });
-                if(mounted) _showSnack(context, "✅ ${result['message']}", Colors.green);
+                if(mounted) _showSnack(context, "Thanh cong: ${result['message']}", Colors.green);
               }
             },
-            child: const Text("Lưu"),
+            child: const Text("Luu"),
           ),
         ],
       ),
@@ -430,29 +505,35 @@ class _RfidManagePageState extends State<RfidManagePage> with MqttFeedbackHandle
     bool? confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text("Xác nhận xóa"),
-        content: Text("Xóa thẻ ${rfids[index]['name']}?"),
+        title: const Text("Xac nhan xoa"),
+        content: Text("Xoa the ${rfids[index]['name']}?"),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Hủy")),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Huy")),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text("Xóa"),
+            child: const Text("Xoa"),
           ),
         ],
       ),
     );
 
     if (confirm == true) {
+      String uidToDelete = rfids[index]['id']!;
+      
       var result = await sendCommandWithFeedback(
         context, 
-        "DELETE:${rfids[index]['id']}", 
+        "DELETE:$uidToDelete", 
         "DELETE"
       );
 
       if (result != null) {
+        // Xóa tên khỏi bộ nhớ
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('card_name_$uidToDelete');
+
         setState(() => rfids.removeAt(index));
-        if(mounted) _showSnack(context, "✅ ${result['message']}", Colors.green);
+        if(mounted) _showSnack(context, "Thanh cong: ${result['message']}", Colors.green);
       }
     }
   }
@@ -460,11 +541,11 @@ class _RfidManagePageState extends State<RfidManagePage> with MqttFeedbackHandle
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Quản lý thẻ RFID")),
+      appBar: AppBar(title: const Text("Quan ly the RFID")),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : rfids.isEmpty
-              ? const Center(child: Text("Chưa có thẻ nào. Nhấn + để thêm.", style: TextStyle(color: Colors.grey)))
+              ? const Center(child: Text("Chua co the nao. Nhan + de them.", style: TextStyle(color: Colors.grey)))
               : ListView.builder(
                   padding: const EdgeInsets.all(16),
                   itemCount: rfids.length,
@@ -483,13 +564,13 @@ class _RfidManagePageState extends State<RfidManagePage> with MqttFeedbackHandle
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _addNewCardProcess,
         icon: const Icon(Icons.add),
-        label: const Text("Thêm thẻ"),
+        label: const Text("Them the"),
       ),
     );
   }
 }
 
-// ================== ĐỔI MẬT KHẨU ==================
+// ================== CHANGE PASSWORD PAGE ==================
 class ChangeLockPasswordPage extends StatefulWidget {
   const ChangeLockPasswordPage({super.key});
   @override
@@ -503,11 +584,11 @@ class _ChangeLockPasswordPageState extends State<ChangeLockPasswordPage> with Mq
   void _changePin() async {
     String newPin = _newPinController.text;
     if (newPin != _confirmPinController.text) {
-      _showSnack(context, "Mã PIN xác nhận không khớp!", Colors.orange);
+      _showSnack(context, "Ma PIN xac nhan khong khop!", Colors.orange);
       return;
     }
     if (newPin.length < 4 || newPin.length > 8) {
-      _showSnack(context, "PIN phải từ 4-8 số!", Colors.orange);
+      _showSnack(context, "PIN phai tu 4-8 so!", Colors.orange);
       return;
     }
 
@@ -515,7 +596,7 @@ class _ChangeLockPasswordPageState extends State<ChangeLockPasswordPage> with Mq
 
     if (result != null) {
       if (mounted) {
-        _showSnack(context, "✅ ${result['message']}", Colors.green);
+        _showSnack(context, "Thanh cong: ${result['message']}", Colors.green);
         Navigator.pop(context);
       }
     }
@@ -524,7 +605,7 @@ class _ChangeLockPasswordPageState extends State<ChangeLockPasswordPage> with Mq
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Đổi mã PIN")),
+      appBar: AppBar(title: const Text("Doi ma PIN")),
       body: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -533,15 +614,15 @@ class _ChangeLockPasswordPageState extends State<ChangeLockPasswordPage> with Mq
               color: Colors.orangeAccent,
               child: Padding(
                 padding: EdgeInsets.all(12.0),
-                child: Text("Mã PIN này dùng để nhập trực tiếp trên bàn phím của khóa (4-8 số).", style: TextStyle(color: Colors.white)),
+                child: Text("Ma PIN nay dung de nhap truc tiep tren ban phim cua khoa (4-8 so).", style: TextStyle(color: Colors.white)),
               ),
             ),
             const SizedBox(height: 20),
-            TextField(controller: _newPinController, decoration: const InputDecoration(labelText: "PIN mới", border: OutlineInputBorder()), keyboardType: TextInputType.number, maxLength: 8),
+            TextField(controller: _newPinController, decoration: const InputDecoration(labelText: "PIN moi", border: OutlineInputBorder()), keyboardType: TextInputType.number, maxLength: 8),
             const SizedBox(height: 15),
-            TextField(controller: _confirmPinController, decoration: const InputDecoration(labelText: "Nhập lại PIN", border: OutlineInputBorder()), keyboardType: TextInputType.number, maxLength: 8),
+            TextField(controller: _confirmPinController, decoration: const InputDecoration(labelText: "Nhap lai PIN", border: OutlineInputBorder()), keyboardType: TextInputType.number, maxLength: 8),
             const SizedBox(height: 30),
-            SizedBox(width: double.infinity, height: 50, child: ElevatedButton(onPressed: _changePin, child: const Text("LƯU THAY ĐỔI"))),
+            SizedBox(width: double.infinity, height: 50, child: ElevatedButton(onPressed: _changePin, child: const Text("LUU THAY DOI"))),
           ],
         ),
       ),
@@ -549,7 +630,7 @@ class _ChangeLockPasswordPageState extends State<ChangeLockPasswordPage> with Mq
   }
 }
 
-// ================== DRAWER ==================
+// ================== APP DRAWER ==================
 class AppDrawer extends StatelessWidget {
   const AppDrawer({super.key});
   @override
@@ -559,23 +640,23 @@ class AppDrawer extends StatelessWidget {
         padding: EdgeInsets.zero,
         children: [
           const UserAccountsDrawerHeader(
-            accountName: Text("Admin Gia Đình"),
+            accountName: Text("Admin Gia Dinh"),
             accountEmail: Text("admin@smartlock.com"),
             currentAccountPicture: CircleAvatar(child: Icon(Icons.person, size: 50)),
             decoration: BoxDecoration(color: Colors.blueAccent),
           ),
           ListTile(leading: const Icon(Icons.dashboard), title: const Text('Dashboard'), onTap: () => Navigator.pop(context)),
           ListTile(
-            leading: const Icon(Icons.nfc), title: const Text('Quản lý thẻ RFID'),
+            leading: const Icon(Icons.nfc), title: const Text('Quan ly the RFID'),
             onTap: () { Navigator.pop(context); Navigator.push(context, MaterialPageRoute(builder: (c) => const RfidManagePage())); },
           ),
           const Divider(),
           ListTile(
-            leading: const Icon(Icons.password), title: const Text('Đổi mật khẩu khóa'),
+            leading: const Icon(Icons.password), title: const Text('Doi mat khau khoa'),
             onTap: () { Navigator.pop(context); Navigator.push(context, MaterialPageRoute(builder: (c) => const ChangeLockPasswordPage())); },
           ),
           ListTile(
-            leading: const Icon(Icons.logout, color: Colors.red), title: const Text('Đăng xuất', style: TextStyle(color: Colors.red)),
+            leading: const Icon(Icons.logout, color: Colors.red), title: const Text('Dang xuat', style: TextStyle(color: Colors.red)),
             onTap: () => Navigator.pushReplacement(context, MaterialPageRoute(builder: (c) => const LoginPage())),
           ),
         ],

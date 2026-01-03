@@ -59,9 +59,9 @@ String validUIDs[10] = {"47:60:3E:05"};
 int validUIDCount = 1;
 
 // WiFi & MQTT
-const char* ssid = "Duong";
-const char* password = "00000000";
-const char* mqttServer = "10.238.213.63";
+const char* ssid = "Duong"; // Thay đổi nếu cần
+const char* password = "00000000"; // Thay đổi nếu cần
+const char* mqttServer = "172.20.10.5"; // IP Broker
 const int mqttPort = 1883;
 const char* mqttClientId = "ESP32_SmartLock";
 
@@ -160,12 +160,12 @@ void savePinToFlash(String newPin) {
 // ==========================
 void sendCommandFeedback(const String &command, bool success, const String &message = "") {
   if (!client.connected()) return;
-  StaticJsonDocument<200> doc;
+  StaticJsonDocument<256> doc;
   doc["action"] = command;
   doc["success"] = success;
   doc["message"] = message;
   doc["timestamp"] = millis();
-  char buffer[200];
+  char buffer[256];
   serializeJson(doc, buffer);
   client.publish(TOPIC_LOG, buffer);
   Serial.println("📤 Feedback: " + String(buffer));
@@ -173,12 +173,12 @@ void sendCommandFeedback(const String &command, bool success, const String &mess
 
 void sendLogMQTT(const String &user, const String &action, bool success) {
   if (!client.connected()) return;
-  StaticJsonDocument<200> doc;
+  StaticJsonDocument<256> doc; // Tăng size buffer
   doc["user"] = user;
   doc["action"] = action;
   doc["success"] = success;
   doc["timestamp"] = millis();
-  char buffer[200];
+  char buffer[256];
   serializeJson(doc, buffer);
   client.publish(TOPIC_LOG, buffer);
   Serial.println("📤 Log: " + String(buffer));
@@ -186,10 +186,10 @@ void sendLogMQTT(const String &user, const String &action, bool success) {
 
 void sendRfidMQTT(const String &rfidCode) {
   if (!client.connected()) return;
-  StaticJsonDocument<100> doc;
+  StaticJsonDocument<128> doc;
   doc["rfid"] = rfidCode;
   doc["code"] = rfidCode;
-  char buffer[100];
+  char buffer[128];
   serializeJson(doc, buffer);
   client.publish(TOPIC_RFID, buffer);
   Serial.println("📤 RFID: " + String(buffer));
@@ -197,9 +197,9 @@ void sendRfidMQTT(const String &rfidCode) {
 
 void sendStatusMQTT() {
   if (!client.connected()) return;
-  StaticJsonDocument<100> doc;
+  StaticJsonDocument<128> doc;
   doc["locked"] = lockState;
-  char buffer[100];
+  char buffer[128];
   serializeJson(doc, buffer);
   client.publish(TOPIC_STATUS, buffer);
   Serial.println("📤 Status: " + String(buffer));
@@ -207,25 +207,30 @@ void sendStatusMQTT() {
 
 void sendSyncCards() {
   if (!client.connected()) return;
-  StaticJsonDocument<512> doc;
+  StaticJsonDocument<1024> doc; // Buffer lớn cho danh sách thẻ
   doc["type"] = "SYNC_CARDS";
   doc["count"] = validUIDCount;
   JsonArray cards = doc.createNestedArray("cards");
   for (int i = 0; i < validUIDCount; i++) {
     cards.add(validUIDs[i]);
   }
-  char buffer[512];
+  char buffer[1024];
   serializeJson(doc, buffer);
-  client.publish(TOPIC_LOG, buffer);
-  Serial.println("📤 Sync Cards: " + String(buffer));
+  // Quan trọng: Kiểm tra xem gói tin có quá lớn so với buffer MQTT không
+  if (strlen(buffer) < 512) { 
+      client.publish(TOPIC_LOG, buffer);
+      Serial.println("📤 Sync Cards Sent");
+  } else {
+      Serial.println("❌ Sync Cards too large!");
+  }
 }
 
 void sendSyncPin() {
   if (!client.connected()) return;
-  StaticJsonDocument<100> doc;
+  StaticJsonDocument<128> doc;
   doc["type"] = "SYNC_PIN";
   doc["pin_length"] = correct_password.length();
-  char buffer[100];
+  char buffer[128];
   serializeJson(doc, buffer);
   client.publish(TOPIC_LOG, buffer);
   Serial.println("📤 Sync PIN length: " + String(buffer));
@@ -258,9 +263,10 @@ void showRFIDStatus(const String &uid, bool valid) {
 
     if (valid) {
       lockState = false;
+      // SỬA: Gửi Log trước, Status sau
       sendLogMQTT("RFID:" + uid, "Mo khoa bang the", true);
+      vTaskDelay(pdMS_TO_TICKS(100)); 
       sendStatusMQTT();
-      // KHÔNG TỰ ĐỘNG KHÓA LẠI
     } else {
       sendLogMQTT("RFID:" + uid, "The khong hop le", false);
     }
@@ -268,7 +274,7 @@ void showRFIDStatus(const String &uid, bool valid) {
 }
 
 // ==========================
-// WIFI
+// WIFI & MQTT SETUP
 // ==========================
 void setupWiFi() {
   WiFi.begin(ssid, password);
@@ -282,9 +288,6 @@ void setupWiFi() {
   Serial.println(WiFi.localIP());
 }
 
-// ==========================
-// CALLBACK MQTT
-// ==========================
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String message = "";
   for (unsigned int i = 0; i < length; i++) {
@@ -297,9 +300,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.println(message);
 
   if (String(topic) == TOPIC_COMMAND) {
-    
     if (message == "SYNC_REQ") {
-      Serial.println("🔄 Yêu cầu đồng bộ dữ liệu từ App");
       sendStatusMQTT();
       delay(50);
       sendSyncCards();
@@ -308,13 +309,11 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       sendCommandFeedback("SYNC_REQ", true, "Dong bo thanh cong");
       
     } else if (message == "SCAN_NEW_RFID") {
-      Serial.println("✅ Vào chế độ quét thẻ mới");
       scanMode = true;
       safePrintCenter("Che do them the!", 1);
       sendCommandFeedback("SCAN_NEW_RFID", true, "Che do quet the");
       
     } else if (message == "CANCEL_SCAN") {
-      Serial.println("❌ Hủy quét thẻ");
       scanMode = false;
       displayKeypadScreen();
       sendCommandFeedback("CANCEL_SCAN", true, "Da huy");
@@ -322,20 +321,28 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     } else if (message == "LOCK") {
       lockState = true;
       safePrintCenter("Da khoa!", 1);
+      
+      // Remote Log
+      sendLogMQTT("Remote", "Khoa tu xa", true);
+      vTaskDelay(pdMS_TO_TICKS(100));
       sendStatusMQTT();
-      sendCommandFeedback("LOCK", true, "Da khoa tu xa");
+      sendCommandFeedback("LOCK", true, "Da khoa tu xa"); // Feedback cho nút bấm
+      
       vTaskDelay(pdMS_TO_TICKS(1500));
       displayKeypadScreen();
       
     } else if (message == "UNLOCK") {
       lockState = false;
       safePrintCenter("Da mo!", 1);
-      sendStatusMQTT();
-      sendCommandFeedback("UNLOCK", true, "Da mo tu xa");
+      
+      // Remote Log
       sendLogMQTT("Remote", "Mo khoa tu xa", true);
+      vTaskDelay(pdMS_TO_TICKS(100));
+      sendStatusMQTT();
+      sendCommandFeedback("UNLOCK", true, "Da mo tu xa"); // Feedback cho nút bấm
+      
       vTaskDelay(pdMS_TO_TICKS(1500));
       displayKeypadScreen();
-      // KHÔNG TỰ ĐỘNG KHÓA LẠI
       
     } else if (message.startsWith("SAVE_CARD:")) {
       int firstColon = message.indexOf(':');
@@ -351,7 +358,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       }
       
       if (alreadyExists) {
-        Serial.println("⚠️ Thẻ đã tồn tại: " + uid);
         safePrintCenter("The da ton tai!", 1);
         sendCommandFeedback("SAVE_CARD", false, "The da ton tai");
         vTaskDelay(pdMS_TO_TICKS(2000));
@@ -359,13 +365,11 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       } else if (validUIDCount < 10) {
         validUIDs[validUIDCount++] = uid;
         saveUIDsToFlash();
-        Serial.println("✅ Đã lưu thẻ: " + uid);
         safePrintCenter("Da luu the!", 1);
         sendCommandFeedback("SAVE_CARD", true, "Da luu: " + uid);
         vTaskDelay(pdMS_TO_TICKS(1500));
         displayKeypadScreen();
       } else {
-        Serial.println("❌ Đã đủ 10 thẻ!");
         safePrintCenter("Day! Khong the them", 1);
         sendCommandFeedback("SAVE_CARD", false, "Da du 10 the");
         vTaskDelay(pdMS_TO_TICKS(2000));
@@ -375,7 +379,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     } else if (message.startsWith("DELETE:")) {
       String uid = message.substring(7);
       bool found = false;
-      
       for (int i = 0; i < validUIDCount; i++) {
         if (validUIDs[i] == uid) {
           for (int j = i; j < validUIDCount - 1; j++) {
@@ -383,7 +386,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
           }
           validUIDCount--;
           saveUIDsToFlash();
-          Serial.println("🗑️ Đã xóa thẻ: " + uid);
           safePrintCenter("Da xoa the!", 1);
           sendCommandFeedback("DELETE", true, "Da xoa: " + uid);
           found = true;
@@ -392,9 +394,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
           break;
         }
       }
-      
       if (!found) {
-        Serial.println("⚠️ Không tìm thấy thẻ: " + uid);
         safePrintCenter("Khong tim thay!", 1);
         sendCommandFeedback("DELETE", false, "Khong tim thay the");
         vTaskDelay(pdMS_TO_TICKS(1500));
@@ -403,7 +403,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       
     } else if (message.startsWith("CHANGE_PIN:")) {
       String newPin = message.substring(11);
-      
       if (newPin.length() >= 4 && newPin.length() <= 8) {
         bool validPin = true;
         for (int i = 0; i < newPin.length(); i++) {
@@ -412,39 +411,29 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
             break;
           }
         }
-        
         if (validPin) {
           correct_password = newPin;
           savePinToFlash(newPin);
-          Serial.println("🔑 Đã đổi PIN: " + newPin);
           safePrintCenter("Da doi PIN!", 1);
           sendCommandFeedback("CHANGE_PIN", true, "Da doi PIN");
           vTaskDelay(pdMS_TO_TICKS(1500));
           displayKeypadScreen();
         } else {
-          Serial.println("❌ PIN không hợp lệ");
           safePrintCenter("PIN khong hop le!", 1);
           sendCommandFeedback("CHANGE_PIN", false, "PIN phai toan so");
           vTaskDelay(pdMS_TO_TICKS(2000));
           displayKeypadScreen();
         }
       } else {
-        Serial.println("❌ PIN phải 4-8 chữ số");
         safePrintCenter("PIN 4-8 chu so!", 1);
         sendCommandFeedback("CHANGE_PIN", false, "PIN phai 4-8 chu so");
         vTaskDelay(pdMS_TO_TICKS(2000));
         displayKeypadScreen();
       }
-    } else {
-      Serial.println("⚠️ Lệnh không xác định: " + message);
-      sendCommandFeedback(message, false, "Lenh khong xac dinh");
     }
   }
 }
 
-// ==========================
-// MQTT CONNECTION
-// ==========================
 void reconnectMQTT() {
   int attempts = 0;
   while (!client.connected() && attempts < 5) {
@@ -455,15 +444,14 @@ void reconnectMQTT() {
     
     if (client.connect(mqttClientId)) {
       Serial.println("✅ Connected!");
-      bool subSuccess = client.subscribe(TOPIC_COMMAND);
-      if (subSuccess) {
-        Serial.println("📡 Subscribed to: " + String(TOPIC_COMMAND));
-      }
+      client.subscribe(TOPIC_COMMAND);
+      
+      // Sửa lỗi Buffer: Tăng buffer size để gửi được gói tin dài
+      client.setBufferSize(512); 
+      
       client.publish(TOPIC_STATUS, "{\"locked\":true,\"online\":true}");
       delay(500);
       sendStatusMQTT();
-      delay(100);
-      sendSyncCards();
       Serial.println("📤 Đã gửi trạng thái ban đầu");
       return;
     } else {
@@ -474,9 +462,6 @@ void reconnectMQTT() {
   }
 }
 
-// ==========================
-// TASKS
-// ==========================
 void keypadTask(void *pvParameters) {
   (void) pvParameters;
   for (;;) {
@@ -509,27 +494,45 @@ void keypadTask(void *pvParameters) {
             offset--;
           }
         } else if (key == 'D') {
+          // --- XÁC NHẬN MẬT KHẨU ---
           if (inputString == correct_password) {
-            // MỞ KHÓA THÀNH CÔNG
             lockState = false;
             safePrintCenter("Mo khoa thanh cong!", 1);
+            
+            // QUAN TRỌNG: Gửi Log TRƯỚC, Status SAU
+            sendLogMQTT("Keypad", "Mo khoa bang PIN", true);
+            vTaskDelay(pdMS_TO_TICKS(100)); 
             sendStatusMQTT();
-            sendLogMQTT("Password", "Mo khoa bang PIN", true);
+            
             vTaskDelay(pdMS_TO_TICKS(2000));
             displayKeypadScreen();
-            // KHÔNG TỰ ĐỘNG KHÓA LẠI
           } else {
-            // SAI MẬT KHẨU
             safePrintCenter("Mat khau khong dung!", 1);
-            sendLogMQTT("Password", "Sai PIN", false);
+            sendLogMQTT("Keypad", "Sai PIN", false);
             vTaskDelay(pdMS_TO_TICKS(2000));
           }
+          inputString = "";
+          offset = 0;
+        } else if (key == 'C') {
+          // --- NÚT KHÓA/MỞ NHANH ---
+          lockState = !lockState;
+          
+          String msg = lockState ? "Da khoa bang phim C" : "Da mo bang phim C";
+          String statusMsg = lockState ? "Da khoa!" : "Da mo!";
+          
+          safePrintCenter(statusMsg, 1);
+          
+          // QUAN TRỌNG: Gửi Log TRƯỚC, Status SAU
+          sendLogMQTT("Keypad", msg, true);
+          vTaskDelay(pdMS_TO_TICKS(100));
+          sendStatusMQTT();
+          
+          vTaskDelay(pdMS_TO_TICKS(1500));
           inputString = "";
           offset = 0;
         }
         xSemaphoreGive(inputMutex);
       }
-
       if (!rfidDisplayActive) displayKeypadScreen();
     }
     vTaskDelay(pdMS_TO_TICKS(50));
@@ -538,18 +541,8 @@ void keypadTask(void *pvParameters) {
 
 void rfidTask(void *pvParameters) {
   (void) pvParameters;
-  Serial.println("🎫 RFID Task started!");
-  
   for (;;) {
-    static unsigned long lastDebug = 0;
-    if (millis() - lastDebug > 5000) {
-      Serial.println("🔄 RFID task running...");
-      lastDebug = millis();
-    }
-    
     if (mfrc522.PICC_IsNewCardPresent()) {
-      Serial.println("👀 Phát hiện thẻ!");
-      
       if (mfrc522.PICC_ReadCardSerial()) {
         String uidStr = "";
         for (byte i = 0; i < mfrc522.uid.size; i++) {
@@ -558,21 +551,15 @@ void rfidTask(void *pvParameters) {
           if (i != mfrc522.uid.size - 1) uidStr += ":";
         }
         uidStr.toUpperCase();
-        Serial.print("✅ Detected UID: ");
-        Serial.println(uidStr);
-
+        
         if (scanMode) {
-          Serial.println("🆕 Gửi mã thẻ mới về App...");
           sendRfidMQTT(uidStr);
           scanMode = false;
           displayKeypadScreen();
         } else {
           bool valid = isValidUID(uidStr);
-          Serial.print("Kiểm tra thẻ: ");
-          Serial.println(valid ? "HỢP LỆ ✅" : "KHÔNG HỢP LỆ ❌");
           showRFIDStatus(uidStr, valid);
         }
-
         mfrc522.PICC_HaltA();
         mfrc522.PCD_StopCrypto1();
       }
@@ -581,68 +568,40 @@ void rfidTask(void *pvParameters) {
   }
 }
 
-// ==========================
-// SETUP
-// ==========================
 void setup() {
   Serial.begin(115200);
   Wire.begin(21, 22);
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println("Không tìm thấy màn hình OLED!");
+    Serial.println("OLED failed");
     for (;;);
   }
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
   display.setCursor(5, 5);
-  display.print("Nhap ma khoa:");
+  display.print("Khoi dong...");
   display.display();
 
   loadUserData();
 
   SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, SS_PIN);
   mfrc522.PCD_Init();
-  Serial.println("RFID reader initialized.");
-  
-  Serial.println("\n=== TEST RFID MODULE ===");
-  byte version = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
-  Serial.print("MFRC522 Version: 0x");
-  Serial.println(version, HEX);
-  
-  if (version == 0x00 || version == 0xFF) {
-    Serial.println("❌ KHÔNG TÌM THẤY MODULE RFID!");
-  } else if (version == 0x91 || version == 0x92) {
-    Serial.println("✅ Module RFID OK!");
-  }
-  
-  Serial.println("Chạy self-test...");
-  bool testResult = mfrc522.PCD_PerformSelfTest();
-  Serial.println(testResult ? "✅ Self-test PASSED!" : "❌ Self-test FAILED!");
-  mfrc522.PCD_Init();
-  Serial.println("========================\n");
 
   displayMutex = xSemaphoreCreateMutex();
   inputMutex = xSemaphoreCreateMutex();
-  if (displayMutex == NULL || inputMutex == NULL) {
-    Serial.println("Failed to create semaphores!");
-    for (;;);
-  }
 
   xTaskCreatePinnedToCore(keypadTask, "KeypadTask", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(rfidTask, "RFIDTask", 4096, NULL, 1, NULL, 1);
 
   setupWiFi();
-  
   client.setServer(mqttServer, mqttPort);
   client.setCallback(mqttCallback);
   
-  Serial.println("✅ ESP32 Ready!");
+  Serial.println("✅ Ready");
+  displayKeypadScreen();
 }
 
-// ==========================
-// LOOP
-// ==========================
 void loop() {
   if (!client.connected()) {
     reconnectMQTT();
